@@ -4,7 +4,7 @@
 Summary:	DokuWiki editx plugin
 Name:		dokuwiki-plugin-%{plugin}
 Version:	20110206
-Release:	2
+Release:	3
 License:	GPL v2
 Group:		Applications/WWW
 Source0:	http://github.com/downloads/danny0838/dw-editx/editx-latest.zip
@@ -15,8 +15,8 @@ BuildRequires:	rpmbuild(macros) >= 1.553
 BuildRequires:	unzip
 Requires:	dokuwiki >= 20061106
 Requires:	php(core) >= %{php_min_version}
-Requires:	php-date
-Requires:	php-pcre
+Requires:	php(date)
+Requires:	php(pcre)
 BuildArch:	noarch
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
