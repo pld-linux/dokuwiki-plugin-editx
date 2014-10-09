@@ -3,13 +3,13 @@
 %include	/usr/lib/rpm/macros.php
 Summary:	DokuWiki editx plugin
 Name:		dokuwiki-plugin-%{plugin}
-Version:	20110206
-Release:	3
+Version:	20140919
+Release:	1
 License:	GPL v2
 Group:		Applications/WWW
-Source0:	http://github.com/downloads/danny0838/dw-editx/editx-latest.zip
-# Source0-md5:	c37d5b8d397bcb67804457a811826d03
-URL:		http://www.dokuwiki.org/plugin:editx
+Source0:	https://github.com/danny0838/dw-editx/tarball/master/%{plugin}-%{version}.tar.gz
+# Source0-md5:	ea5edbf984caf7ed901979bb8051a94b
+URL:		https://www.dokuwiki.org/plugin:editx
 BuildRequires:	rpm-php-pearprov >= 4.4.2-11
 BuildRequires:	rpmbuild(macros) >= 1.553
 BuildRequires:	unzip
@@ -30,7 +30,7 @@ Extended edit functions such as renaming or deleting a page.
 
 %prep
 %setup -qc
-mv %{plugin}/* .
+mv *%{plugin}*/* .
 %undos -f php
 
 version=$(awk '/^date/{print $2}' plugin.info.txt)
