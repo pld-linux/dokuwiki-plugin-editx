@@ -1,6 +1,5 @@
 %define		plugin		editx
 %define		php_min_version 5.0.0
-%include	/usr/lib/rpm/macros.php
 Summary:	DokuWiki editx plugin
 Name:		dokuwiki-plugin-%{plugin}
 Version:	20140919
