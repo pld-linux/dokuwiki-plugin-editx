@@ -2,12 +2,12 @@
 %define		php_min_version 5.0.0
 Summary:	DokuWiki editx plugin
 Name:		dokuwiki-plugin-%{plugin}
-Version:	20140919
+Version:	20160207
 Release:	1
 License:	GPL v2
 Group:		Applications/WWW
 Source0:	https://github.com/danny0838/dw-editx/tarball/master/%{plugin}-%{version}.tar.gz
-# Source0-md5:	ea5edbf984caf7ed901979bb8051a94b
+# Source0-md5:	dbc337cf034cefb1ecd9a686c0de97d4
 URL:		https://www.dokuwiki.org/plugin:editx
 BuildRequires:	rpm-php-pearprov >= 4.4.2-11
 BuildRequires:	rpmbuild(macros) >= 1.553
@@ -22,7 +22,7 @@ BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 %define		dokuconf	/etc/webapps/dokuwiki
 %define		dokudir		/usr/share/dokuwiki
 %define		plugindir	%{dokudir}/lib/plugins/%{plugin}
-%define		find_lang 	%{_usrlibrpm}/dokuwiki-find-lang.sh %{buildroot}
+%define		find_lang 	%{_prefix}/lib/rpm/dokuwiki-find-lang.sh %{buildroot}
 
 %description
 Extended edit functions such as renaming or deleting a page.
@@ -32,11 +32,12 @@ Extended edit functions such as renaming or deleting a page.
 mv *%{plugin}*/* .
 %undos -f php
 
-version=$(awk '/^date/{print $2}' plugin.info.txt)
-if [ "$(echo "$version" | tr -d -)" != %{version} ]; then
-	: %%{version} mismatch
-	exit 1
-fi
+# using date from latest commit
+#version=$(awk '/^date/{print $2}' plugin.info.txt)
+#if [ "$(echo "$version" | tr -d -)" != %{version} ]; then
+#	: %%{version} mismatch
+#	exit 1
+#fi
 
 %install
 rm -rf $RPM_BUILD_ROOT
