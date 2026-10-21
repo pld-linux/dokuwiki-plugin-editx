@@ -1,0 +1,354 @@
+# Require CSRF-protected POSTs, escape form values, enforce create ACLs and handle file operation failures.
+# Match history filenames literally and rename only their page-name prefix.
+--- a/action.php
++++ b/action.php
+@@ -47,20 +47,25 @@
+         if($event->data != 'editx') return;
+         $event->preventDefault();
+ 
+-        switch ($_REQUEST['work']) {
++        if ($this->_post('work') && !checkSecurityToken($this->_post('sectok'))) {
++            $this->_print_form();
++            return;
++        }
++
++        switch ($this->_post('work')) {
+             case 'rename':
+-                $opts['oldpage'] = cleanID($_REQUEST['oldpage']);
+-                $opts['newpage'] = cleanID($_REQUEST['newpage']);
+-                $opts['summary'] = $_REQUEST['summary'];
+-                $opts['rp_nr'] = $_REQUEST['rp_nr'];
+-                $opts['confirm'] = $_REQUEST['rp_confirm'];
++                $opts['oldpage'] = cleanID($this->_post('oldpage'));
++                $opts['newpage'] = cleanID($this->_post('newpage'));
++                $opts['summary'] = $this->_post('summary');
++                $opts['rp_nr'] = $this->_post('rp_nr');
++                $opts['confirm'] = $this->_post('rp_confirm');
+                 $this->_rename_page($opts);
+                 break;
+             case 'delete':
+-                $opts['oldpage'] = cleanID($_REQUEST['oldpage']);
+-                $opts['summary'] = $_REQUEST['summary'];
+-                $opts['purge'] = $_REQUEST['dp_purge'];
+-                $opts['confirm'] = $_REQUEST['dp_confirm'];
++                $opts['oldpage'] = cleanID($this->_post('oldpage'));
++                $opts['summary'] = $this->_post('summary');
++                $opts['purge'] = $this->_post('dp_purge');
++                $opts['confirm'] = $this->_post('dp_confirm');
+                 $this->_delete_page($opts);
+                 break;
+             default:
+@@ -72,6 +77,10 @@
+     /**
+      * helper functions
+      */
++    function _post($key) {
++        return isset($_POST[$key]) && is_string($_POST[$key]) ? $_POST[$key] : '';
++    }
++
+     function _auth_check_list($list) {
+         global $conf;
+         global $USERINFO;
+@@ -145,10 +154,11 @@
+                 if (is_file($oldfile) && preg_match($regex,$file)){
+                     $opts['oldfiles'][] = $oldfile;
+                     if (!empty($opts['move'])) {
+-                        $newfilebase = str_replace($opts['oldname'], $opts['newname'], $file);
++                        $newfilebase = $opts['newname'].substr($file, strlen($opts['oldname']));
+                         $newfile = $newpath.$newfilebase;
+                         if (@file_exists($newfile)) {
+-                            $this->errors[] = sprintf( $this->getLang('rp_msg_file_conflict'), '<a href="'. wl($opts['newpage']) . '">'.$opts['newpage'].'</a>', $newfilebase );
++                            $this->errors[] = sprintf( $this->getLang('rp_msg_file_conflict'), '<a href="'. wl($opts['newpage']) . '">'.hsc($opts['newpage']).'</a>', hsc($newfilebase) );
++                            closedir($dh);
+                             return false;
+                         }
+                         $opts['newfiles'][] = $newfile;
+@@ -158,22 +168,42 @@
+             closedir($dh);
+             return true;
+         }
+-        return false;
++        if (is_dir($oldpath)) {
++            $this->errors[] = sprintf($this->getLang('msg_io_error'), hsc($oldpath));
++            return false;
++        }
++        return true;
++    }
++
++    function _rollback_moves(&$opts, $count) {
++        for ($i = $count - 1; $i >= 0; $i--) {
++            if (!io_rename($opts['newfiles'][$i], $opts['oldfiles'][$i])) {
++                $this->errors[] = sprintf($this->getLang('msg_io_error'), hsc($opts['oldfiles'][$i]));
++            }
++        }
+     }
+ 
+     function _apply_moves(&$opts) {
+         foreach ($opts['oldfiles'] as $i => $oldfile) {
+             $newfile = $opts['newfiles'][$i];
+             $newdir = dirname($newfile);
+-            if (!io_mkdir_p($newdir)) continue;
+-            io_rename($oldfile, $newfile);
+-        }
++            if (!io_mkdir_p($newdir) || !io_rename($oldfile, $newfile)) {
++                $this->errors[] = sprintf($this->getLang('msg_io_error'), hsc($newfile));
++                $this->_rollback_moves($opts, $i);
++                return false;
++            }
++        }
++        return true;
+     }
+ 
+     function _apply_deletes(&$opts) {
+         foreach ($opts['oldfiles'] as $oldfile) {
+-            unlink($oldfile);
+-        }
++            if (!@unlink($oldfile)) {
++                $this->errors[] = sprintf($this->getLang('msg_io_error'), hsc($oldfile));
++                return false;
++            }
++        }
++        return true;
+     }
+ 
+     function _FN($id) {
+@@ -184,18 +214,27 @@
+ 
+     function _custom_delete_page($id, $summary) {
+         global $ID, $INFO, $conf;
+-        // mark as nonexist to prevent indexerWebBug
+-        if ($id==$ID) $INFO['exists'] = 0;
+         // delete page, meta and attic
+         $file = wikiFN($id);
+         $old = @filemtime($file); // from page
+-        if (file_exists($file)) unlink($file);
++
+         $opts['oldname'] = $this->_FN(noNS($id));
+         $opts['oldns'] = $this->_FN(getNS($id));
+         if ($opts['oldns']) $opts['oldns'] .= '/';
+-        $this->_locate_filepairs( $opts, 'metadir', '/^'.$opts['oldname'].'\.(?!mlist)\w*?$/' );
+-        $this->_locate_filepairs( $opts, 'olddir', '/^'.$opts['oldname'].'\.\d{10}\.txt(\.gz|\.bz2)?$/' );
+-        $this->_apply_deletes($opts);
++        $this->_locate_filepairs( $opts, 'metadir', '/^'.preg_quote($opts['oldname'], '/').'\.(?!mlist)\w*?$/' );
++        $this->_locate_filepairs( $opts, 'olddir', '/^'.preg_quote($opts['oldname'], '/').'\.\d{10}\.txt(\.gz|\.bz2)?$/' );
++        if ($this->errors) return false;
++        if (file_exists($file)) $opts['oldfiles'][] = $file;
++        // Check all parent directories before removing any history.
++        foreach ($opts['oldfiles'] as $oldfile) {
++            if (!is_writable(dirname($oldfile))) {
++                $this->errors[] = sprintf($this->getLang('msg_io_error'), hsc($oldfile));
++                return false;
++            }
++        }
++        if (!$this->_apply_deletes($opts)) return false;
++        // mark as nonexist to prevent indexerWebBug
++        if ($id==$ID) $INFO['exists'] = 0;
+         io_sweepNS($id, 'datadir');
+         io_sweepNS($id, 'metadir');
+         io_sweepNS($id, 'olddir');
+@@ -212,12 +251,14 @@
+                 $cache->removeCache();
+             }
+         }
++        return true;
+     }
+ 
+     /**
+      * main functions
+      */
+     function _rename_page(&$opts) {
++        $this->errors = array();
+         // check confirmation
+         if (!$opts['confirm']) {
+             $this->errors[] = $this->getLang('rp_msg_unconfirmed');
+@@ -226,11 +267,11 @@
+         if (!$opts['oldpage']) {
+             $this->errors[] = $this->getLang('rp_msg_old_empty');
+         } else if (!page_exists($opts['oldpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('rp_msg_old_noexist'), $opts['oldpage'] );
++            $this->errors[] = sprintf( $this->getLang('rp_msg_old_noexist'), hsc($opts['oldpage']) );
+         } else if (!$this->_auth_can_rename($opts['oldpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('rp_msg_auth'), $opts['oldpage'] );
++            $this->errors[] = sprintf( $this->getLang('rp_msg_auth'), hsc($opts['oldpage']) );
+         } else if (checklock($opts['oldpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('rp_msg_locked'), $opts['oldpage'] );
++            $this->errors[] = sprintf( $this->getLang('rp_msg_locked'), hsc($opts['oldpage']) );
+         }
+         // check noredirect
+         if ($opts['rp_nr'] && !$this->_auth_can_rename_nr($opts['oldpage']))
+@@ -239,11 +280,12 @@
+         if (!$opts['newpage']) {
+             $this->errors[] = $this->getLang('rp_msg_new_empty');
+         } else if (page_exists($opts['newpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('rp_msg_new_exist'), '<a href="'. wl($opts['newpage']) . '">'.$opts['newpage'].'</a>' );
+-        } else if (!$this->_auth_can_rename($opts['newpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('rp_msg_auth'), $opts['newpage'] );
++            $this->errors[] = sprintf( $this->getLang('rp_msg_new_exist'), '<a href="'. wl($opts['newpage']) . '">'.hsc($opts['newpage']).'</a>' );
++        } else if (!$this->_auth_can_rename($opts['newpage']) ||
++                   auth_quickaclcheck($opts['newpage']) < AUTH_CREATE) {
++            $this->errors[] = sprintf( $this->getLang('rp_msg_auth'), hsc($opts['newpage']) );
+         } else if (checklock($opts['newpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('rp_msg_locked'), $opts['newpage'] );
++            $this->errors[] = sprintf( $this->getLang('rp_msg_locked'), hsc($opts['newpage']) );
+         }
+         // try to locate moves
+         if (!$this->errors) {
+@@ -254,13 +296,11 @@
+             $opts['newns'] = $this->_FN(getNS($opts['newpage']));
+             if ($opts['oldns']) $opts['oldns'] .= '/';
+             if ($opts['newns']) $opts['newns'] .= '/';
+-            $this->_locate_filepairs( $opts, 'metadir', '/^'.$opts['oldname'].'\.(?!mlist|meta|indexed)\w*?$/' );
+-            $this->_locate_filepairs( $opts, 'olddir', '/^'.$opts['oldname'].'\.\d{10}\.txt(\.gz|\.bz2)?$/' );
++            $this->_locate_filepairs( $opts, 'metadir', '/^'.preg_quote($opts['oldname'], '/').'\.(?!mlist|meta|indexed)\w*?$/' );
++            $this->_locate_filepairs( $opts, 'olddir', '/^'.preg_quote($opts['oldname'], '/').'\.\d{10}\.txt(\.gz|\.bz2)?$/' );
+         }
+         // if no error do rename
+-        if (!$this->errors) {
+-            // move meta and attic
+-            $this->_apply_moves($opts);
++        if (!$this->errors && $this->_apply_moves($opts)) {
+             // save to newpage
+             $text = rawWiki($opts['oldpage']);
+             if ($opts['summary'])
+@@ -268,17 +308,22 @@
+             else
+                 $summary = sprintf( $this->getLang('rp_newsummary'), $opts['oldpage'], $opts['newpage'] );
+             saveWikiText($opts['newpage'],$text,$summary);
++            if (!page_exists($opts['newpage']) || rawWiki($opts['newpage']) !== $text) {
++                $this->errors[] = sprintf($this->getLang('msg_io_error'), hsc(wikiFN($opts['newpage'])));
++                $this->_rollback_moves($opts, count($opts['oldfiles']));
++            }
+             // purge or recreate old page
+             $summary = $opts['summary'] ?
+                 sprintf( $this->getLang('rp_oldsummaryx'), $opts['oldpage'], $opts['newpage'], $opts['summary'] ) :
+                 sprintf( $this->getLang('rp_oldsummary'), $opts['oldpage'], $opts['newpage'] );
+-            if ($opts['rp_nr']) {
+-                $this->_custom_delete_page( $opts['oldpage'], $summary );
+-                // write change log afterwards, or it would be deleted
+-                addLogEntry( null, $opts['oldpage'], DOKU_CHANGE_TYPE_DELETE, $summary ); // also writes to global changes
+-                unlink(metaFN($opts['oldpage'],'.changes')); // purge page changes
+-            }
+-            else {
++            if (!$this->errors && $opts['rp_nr']) {
++                if ($this->_custom_delete_page( $opts['oldpage'], $summary )) {
++                    // write change log afterwards, or it would be deleted
++                    addLogEntry( null, $opts['oldpage'], DOKU_CHANGE_TYPE_DELETE, $summary ); // also writes to global changes
++                    unlink(metaFN($opts['oldpage'],'.changes')); // purge page changes
++                }
++            }
++            else if (!$this->errors) {
+                 $text = $this->getConf('redirecttext');
+                 if (!$text) $text = $this->getLang('redirecttext');
+                 $text = str_replace( '@ID@', $opts['newpage'], $text );
+@@ -291,7 +336,7 @@
+             foreach ($this->errors as $error) msg( $error, -1 );
+         }
+         else {
+-            $msg = sprintf( $this->getLang('rp_msg_success'), $opts['oldpage'], '<a href="'. wl($opts['newpage']) . '">'.$opts['newpage'].'</a>' );
++            $msg = sprintf( $this->getLang('rp_msg_success'), hsc($opts['oldpage']), '<a href="'. wl($opts['newpage']) . '">'.hsc($opts['newpage']).'</a>' );
+             msg( $msg, 1 );
+         }
+         // display form and table
+@@ -300,6 +345,7 @@
+     }
+ 
+     function _delete_page(&$opts) {
++        $this->errors = array();
+         // check confirm
+         if (!$opts['confirm']) {
+             $this->errors[] = $this->getLang('dp_msg_unconfirmed');
+@@ -308,24 +354,27 @@
+         if (!$opts['oldpage']) {
+             $this->errors[] = $this->getLang('dp_msg_old_empty');
+         } else if (!$this->_auth_can_delete($opts['oldpage'])) {
+-            $this->errors[] = sprintf( $this->getLang('dp_msg_auth'), $opts['oldpage'] );
++            $this->errors[] = sprintf( $this->getLang('dp_msg_auth'), hsc($opts['oldpage']) );
++        } else if (checklock($opts['oldpage'])) {
++            $this->errors[] = sprintf( $this->getLang('rp_msg_locked'), hsc($opts['oldpage']) );
+         }
+         // if no error do delete
+         if (!$this->errors) {
+             $summary = $opts['summary'] ? 
+                 sprintf( $this->getLang('dp_oldsummaryx'), $opts['summary'] ) :
+                 $this->getLang('dp_oldsummary');
+-            $this->_custom_delete_page( $opts['oldpage'], $summary );
+-            // write change log afterwards, or it would be deleted
+-            addLogEntry( null, $opts['oldpage'], DOKU_CHANGE_TYPE_DELETE, $summary ); // also writes to global changes
+-            if ($opts['purge']) unlink(metaFN($opts['oldpage'],'.changes')); // purge page changes
++            if ($this->_custom_delete_page( $opts['oldpage'], $summary )) {
++                // write change log afterwards, or it would be deleted
++                addLogEntry( null, $opts['oldpage'], DOKU_CHANGE_TYPE_DELETE, $summary ); // also writes to global changes
++                if ($opts['purge']) unlink(metaFN($opts['oldpage'],'.changes')); // purge page changes
++            }
+         }
+         // show messages
+         if ($this->errors) {
+             foreach ($this->errors as $error) msg( $error, -1 );
+         }
+         else {
+-            $msg = sprintf( $this->getLang('dp_msg_success'), $opts['oldpage'] );
++            $msg = sprintf( $this->getLang('dp_msg_success'), hsc($opts['oldpage']) );
+             msg( $msg, 1 );
+         }
+         // display form and table
+@@ -339,25 +388,26 @@
+         global $ID, $lang;
+         $chk = ' checked="checked"';
+ ?>
+-<h1><?php echo sprintf( $this->getLang('title'), $ID); ?></h1>
++<h1><?php echo sprintf( $this->getLang('title'), hsc($ID)); ?></h1>
+ <div id="config__manager">
+ <?php 
+     if ($this->_auth_can_rename($ID)) {
+ ?>
+     <form action="<?php echo wl($ID); ?>" method="post">
++    <?php formSecurityToken(); ?>
+     <fieldset>
+     <legend><?php echo $this->getLang('rp_title'); ?></legend>
+         <input type="hidden" name="do" value="editx" />
+         <input type="hidden" name="work" value="rename" />
+-        <input type="hidden" name="oldpage" value="<?php echo $ID; ?>" />
++        <input type="hidden" name="oldpage" value="<?php echo hsc($ID); ?>" />
+         <table class="inline">
+             <tr>
+                 <td class="label"><?php echo $this->getLang('rp_newpage'); ?></td>
+-                <td class="value"><input class="edit" type="input" name="newpage" value="<?php echo $data['rp_newpage']; ?>" /></td>
++                <td class="value"><input class="edit" type="input" name="newpage" value="<?php echo hsc($data['rp_newpage']); ?>" /></td>
+             </tr>
+             <tr>
+                 <td class="label"><?php echo $this->getLang('rp_summary'); ?></td>
+-                <td class="value"><input class="edit" type="input" name="summary" value="<?php echo $data['rp_summary']; ?>" /></td>
++                <td class="value"><input class="edit" type="input" name="summary" value="<?php echo hsc($data['rp_summary']); ?>" /></td>
+             </tr>
+ <?php 
+         if ($this->_auth_can_rename_nr($ID)) {
+@@ -385,15 +435,16 @@
+     if ($this->_auth_can_delete($ID)) {
+ ?>
+     <form action="<?php echo wl($ID); ?>" method="post">
++    <?php formSecurityToken(); ?>
+     <fieldset>
+     <legend><?php echo $this->getLang('dp_title'); ?></legend>
+         <input type="hidden" name="do" value="editx" />
+         <input type="hidden" name="work" value="delete" />
+-        <input type="hidden" name="oldpage" value="<?php echo $ID; ?>" />
++        <input type="hidden" name="oldpage" value="<?php echo hsc($ID); ?>" />
+         <table class="inline">
+             <tr>
+                 <td class="label"><?php echo $this->getLang('dp_summary'); ?></td>
+-                <td class="value"><input class="edit" type="input" name="summary" value="<?php echo $data['dp_summary']; ?>" /></td>
++                <td class="value"><input class="edit" type="input" name="summary" value="<?php echo hsc($data['dp_summary']); ?>" /></td>
+             </tr>
+             <tr>
+                 <td class="label"><?php echo $this->getLang('dp_purge'); ?></td>
+--- a/lang/en/lang.php
++++ b/lang/en/lang.php
+@@ -8,6 +8,8 @@
+ $lang['title']              = '%s Management';
+ $lang['redirecttext']       = 'This page is redirected to [[:@ID@]].';
+ $lang['pagemanagement']     = 'page management';
++
++$lang['msg_io_error'] = 'Could not update file %s. Check file permissions.';
+ 
+ // rename page = rp
+ $lang['rp_title']           = 'Page Rename';

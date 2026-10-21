@@ -1,0 +1,119 @@
+# PHP 8 rejects curly string offsets and bare array keys; DokuWiki loads fulltext via compatibility functions.
+--- a/action.php
++++ b/action.php
+@@ -8,9 +8,13 @@
+ if(!defined('DOKU_INC')) die();
+ if (!defined('DOKU_PLUGIN')) define('DOKU_PLUGIN', DOKU_INC . 'lib/plugins/');
+ require_once (DOKU_PLUGIN . 'action.php');
+-require_once(DOKU_INC.'inc/fulltext.php');
++if (!function_exists('ft_backlinks')) {
++    require_once(DOKU_INC.'inc/fulltext.php');
++}
+ 
+ class action_plugin_editx extends DokuWiki_Action_Plugin {
++
++    var $errors = array();
+ 
+     /**
+      * register the eventhandlers
+@@ -81,8 +85,8 @@
+ 
+         if(!count($allowed)) return true; //no restrictions
+ 
+-        $user   = $_SERVER['REMOTE_USER'];
+-        $groups = (array) $USERINFO['grps'];
++        $user   = isset($_SERVER['REMOTE_USER']) ? $_SERVER['REMOTE_USER'] : '';
++        $groups = isset($USERINFO['grps']) ? (array) $USERINFO['grps'] : array();
+ 
+         if(in_array($user,$allowed)) return true; //user explicitly mentioned
+ 
+@@ -101,8 +105,8 @@
+     }
+     
+     function _auth_can_rename($id) {
+-        static $cache = null;
+-        if (!$cache[$id]) {
++        static $cache = array();
++        if (!isset($cache[$id])) {
+             $cache[$id] = auth_quickaclcheck($id)>=AUTH_EDIT &&
+                 $this->_auth_check_list($this->getConf('user_rename'));
+         }
+@@ -110,8 +114,8 @@
+     }
+ 
+     function _auth_can_rename_nr($id) {
+-        static $cache = null;
+-        if (!$cache[$id]) {
++        static $cache = array();
++        if (!isset($cache[$id])) {
+             $cache[$id] = auth_quickaclcheck($id)>=AUTH_DELETE &&
+                 $this->_auth_check_list($this->getConf('user_rename_nr'));
+         }
+@@ -119,8 +123,8 @@
+     }
+ 
+     function _auth_can_delete($id) {
+-        static $cache = null;
+-        if (!$cache[$id]) {
++        static $cache = array();
++        if (!isset($cache[$id])) {
+             $cache[$id] = auth_quickaclcheck($id)>=AUTH_DELETE &&
+                 $this->_auth_check_list($this->getConf('user_delete'));
+         }
+@@ -130,17 +134,17 @@
+     function _locate_filepairs(&$opts, $dir, $regex ){
+         global $conf;
+         $oldpath = $conf[$dir].'/'.str_replace(':','/',$opts['oldns']);
+-        $newpath = $conf[$dir].'/'.str_replace(':','/',$opts['newns']);
+-        if (!$opts['oldfiles']) $opts['oldfiles'] = array();
+-        if (!$opts['newfiles']) $opts['newfiles'] = array();
++        $newpath = empty($opts['move']) ? '' : $conf[$dir].'/'.str_replace(':','/',$opts['newns']);
++        if (!isset($opts['oldfiles'])) $opts['oldfiles'] = array();
++        if (!isset($opts['newfiles'])) $opts['newfiles'] = array();
+         $dh = @opendir($oldpath);
+         if($dh) {
+             while(($file = readdir($dh)) !== false){
+-                if ($file{0}=='.') continue;
++                if ($file[0]=='.') continue;
+                 $oldfile = $oldpath.$file;
+                 if (is_file($oldfile) && preg_match($regex,$file)){
+                     $opts['oldfiles'][] = $oldfile;
+-                    if ($opts['move']) {
++                    if (!empty($opts['move'])) {
+                         $newfilebase = str_replace($opts['oldname'], $opts['newname'], $file);
+                         $newfile = $newpath.$newfilebase;
+                         if (@file_exists($newfile)) {
+@@ -173,7 +177,7 @@
+     }
+ 
+     function _FN($id) {
+-        $id = str_replace(':','/',$id);
++        $id = str_replace(':','/',(string) $id);
+         $id = utf8_encodeFN($id);
+         return $id;
+     }
+@@ -291,7 +295,7 @@
+             msg( $msg, 1 );
+         }
+         // display form and table
+-        $data = array( rp_newpage => $opts['newpage'], rp_summary => $opts['summary'], rp_nr => $opts['rp_nr'] );
++        $data = array( 'rp_newpage' => $opts['newpage'], 'rp_summary' => $opts['summary'], 'rp_nr' => $opts['rp_nr'] );
+         $this->_print_form($data);
+     }
+ 
+@@ -325,11 +329,13 @@
+             msg( $msg, 1 );
+         }
+         // display form and table
+-        $data = array( dp_purge => $opts['purge'], dp_summary => $opts['summary'] );
++        $data = array( 'dp_purge' => $opts['purge'], 'dp_summary' => $opts['summary'] );
+         $this->_print_form($data);
+     }
+ 
+-    function _print_form($data=null) {
++    function _print_form($data=array()) {
++        $data = (array) $data + array('rp_newpage' => '', 'rp_summary' => '',
++            'rp_nr' => false, 'dp_purge' => false, 'dp_summary' => '');
+         global $ID, $lang;
+         $chk = ' checked="checked"';
+ ?>

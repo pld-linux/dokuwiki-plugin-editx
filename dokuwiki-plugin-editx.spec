@@ -3,16 +3,19 @@
 Summary:	DokuWiki editx plugin
 Name:		dokuwiki-plugin-%{plugin}
 Version:	20160207
-Release:	1
+Release:	2
 License:	GPL v2
 Group:		Applications/WWW
-Source0:	https://github.com/danny0838/dw-editx/tarball/master/%{plugin}-%{version}.tar.gz
+Source0:	https://github.com/danny0838/dokuwiki-plugin-editx/tarball/644a3148c5aa2079e6df7ed62baa48d545de073e/%{plugin}-%{version}.tar.gz
 # Source0-md5:	dbc337cf034cefb1ecd9a686c0de97d4
+Source1:	regression.php
+Patch0:		dokuwiki-plugin-editx-compat.patch
+Patch1:		dokuwiki-plugin-editx-safety.patch
 URL:		https://www.dokuwiki.org/plugin:editx
 BuildRequires:	rpm-php-pearprov >= 4.4.2-11
 BuildRequires:	rpmbuild(macros) >= 1.553
-BuildRequires:	unzip
-Requires:	dokuwiki >= 20061106
+# checkSecurityToken() and formSecurityToken()
+Requires:	dokuwiki >= 20080505
 Requires:	php(core) >= %{php_min_version}
 Requires:	php(date)
 Requires:	php(pcre)
@@ -31,6 +34,8 @@ Extended edit functions such as renaming or deleting a page.
 %setup -qc
 mv *%{plugin}*/* .
 %undos -f php
+%patch -P0 -p1
+%patch -P1 -p1
 
 # using date from latest commit
 #version=$(awk '/^date/{print $2}' plugin.info.txt)
